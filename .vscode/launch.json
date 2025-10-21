@@ -1,0 +1,74 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        // {
+        //     // 配置名称（自定义，方便识别）
+        //     "name": "Python: debug HiVT eval.py",
+        //     // 调试类型（固定为 python）
+        //     "type": "python",
+        //     // 调试请求方式（launch 表示主动启动调试）
+        //     "request": "launch",
+        //     // 1. 指定要调试的 Python 脚本路径（即你的 eval.py）
+        //     // 若 launch.json 在项目根目录，直接写 eval.py 即可；若在 .vscode 子目录，路径不变（VS Code 会自动从项目根目录查找）
+        //     "program": "/mnt/workspace/gac_jianglu/HiVT/eval.py",
+        //     // 2. 传递命令行参数（对应你命令中的 --root、--batch_size、--ckpt_path）
+        //     // 注意：参数需拆分为数组元素，每个 --xxx 和 值 分别作为一个元素（空格分隔对应数组分隔）
+        //     "args": [
+        //         "--root", "datasets/",
+        //         "--batch_size", "32",
+        //         "--ckpt_path", "checkpoints/HiVT-64/checkpoints/epoch=63-step=411903.ckpt"
+        //     ],
+        //     // 3. 指定 Python 解释器路径（可选但推荐，避免使用系统默认解释器导致依赖问题）
+        //     // 示例路径：虚拟环境 Python（如 conda、venv），需替换为你实际的 Python 路径
+        //     // 如何获取路径：终端执行 which python3（Linux/Mac）或 where python3（Windows）
+        //     "pythonPath": "/usr/bin/python3",
+        //     // "pythonPath": "${workspaceFolder}\\venv\\Scripts\\python.exe",  // Windows 示例（虚拟环境）
+        //     // 4. 工作目录（固定为项目根目录，确保脚本中相对路径（如 datasets/）正确解析）
+        //     "cwd": "/mnt/workspace/gac_jianglu/HiVT"
+        //     // 5. 调试控制台类型（integratedTerminal 表示使用 VS Code 内置终端，方便查看输出）
+        //     "console": "integratedTerminal",
+        //     // 6. 自动附加调试器（可选，设为 true 可自动捕获异常）
+        //     "justMyCode": false,  // 关键：设为 false 可调试第三方库代码（如 pytorch_lightning、torch），若只需调试自己的代码，可设为 true
+        //     // 7. 环境变量（可选，若需要额外设置环境变量，如 CUDA_VISIBLE_DEVICES 等）
+        //     "env": {
+        //         // 示例：指定使用第 0 块 GPU（若需要）
+        //         "CUDA_VISIBLE_DEVICES": "0",
+        //         // 若之前遇到 sklearn 废弃警告，可在此添加环境变量（可选）
+        //         // "SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL": "True"
+        //     },
+        //     // 8. 异常断点（可选，自动在抛出异常时暂停）
+        //     "exceptionBreakpointFilters": [
+        //         {
+        //             "name": "Python Exceptions",
+        //             "enabled": true
+        //         }
+        //     ]
+        // }
+
+
+        // python train.py --root datasets/ --embed_dim 64
+        {
+            "name": "Python: train HiVT eval.py",
+            "type": "python",
+            "request": "launch",
+            "program": "/mnt/workspace/gac_jianglu/HiVT/train.py",
+            "args": [
+                "--root", "datasets/",
+                "--embed_dim", "64",
+            ],
+            "pythonPath": "/usr/bin/python3",
+            "cwd": "/mnt/workspace/gac_jianglu/HiVT"
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+            },
+            "exceptionBreakpointFilters": [
+                {
+                    "name": "Python Exceptions",
+                    "enabled": true
+                }
+            ]
+        }
+    ]
+}

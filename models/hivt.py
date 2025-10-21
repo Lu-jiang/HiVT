@@ -143,11 +143,47 @@ class HiVT(pl.LightningModule):
         self.log('val_minFDE', self.minFDE, prog_bar=True, on_step=False, on_epoch=True, batch_size=y_agent.size(0))
         self.log('val_minMR', self.minMR, prog_bar=True, on_step=False, on_epoch=True, batch_size=y_agent.size(0))
 
+    # def configure_optimizers(self):
+    #     decay = set()
+    #     no_decay = set()
+    #     whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention, nn.LSTM, nn.GRU)
+    #     blacklist_weight_modules = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.Embedding)
+    #     for module_name, module in self.named_modules():
+    #         for param_name, param in module.named_parameters():
+    #             full_param_name = '%s.%s' % (module_name, param_name) if module_name else param_name
+    #             if 'bias' in param_name:
+    #                 no_decay.add(full_param_name)
+    #             elif 'weight' in param_name:
+    #                 if isinstance(module, whitelist_weight_modules):
+    #                     decay.add(full_param_name)
+    #                 elif isinstance(module, blacklist_weight_modules):
+    #                     no_decay.add(full_param_name)
+    #             elif not ('weight' in param_name or 'bias' in param_name):
+    #                 no_decay.add(full_param_name)
+    #     param_dict = {param_name: param for param_name, param in self.named_parameters()}
+    #     inter_params = decay & no_decay
+    #     union_params = decay | no_decay
+    #     assert len(inter_params) == 0
+    #     assert len(param_dict.keys() - union_params) == 0
+
+    #     optim_groups = [
+    #         {"params": [param_dict[param_name] for param_name in sorted(list(decay))],
+    #          "weight_decay": self.weight_decay},
+    #         {"params": [param_dict[param_name] for param_name in sorted(list(no_decay))],
+    #          "weight_decay": 0.0},
+    #     ]
+
+    #     optimizer = torch.optim.AdamW(optim_groups, lr=self.lr, weight_decay=self.weight_decay)
+    #     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.T_max, eta_min=0.0)
+    #     return [optimizer], [scheduler]
+
     def configure_optimizers(self):
         decay = set()
         no_decay = set()
         whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention, nn.LSTM, nn.GRU)
         blacklist_weight_modules = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.Embedding)
+        
+        # 1. 按模块类型划分需要/不需要权重衰减的参数（你的原有逻辑完全保留）
         for module_name, module in self.named_modules():
             for param_name, param in module.named_parameters():
                 full_param_name = '%s.%s' % (module_name, param_name) if module_name else param_name
@@ -160,22 +196,40 @@ class HiVT(pl.LightningModule):
                         no_decay.add(full_param_name)
                 elif not ('weight' in param_name or 'bias' in param_name):
                     no_decay.add(full_param_name)
+        
         param_dict = {param_name: param for param_name, param in self.named_parameters()}
         inter_params = decay & no_decay
         union_params = decay | no_decay
-        assert len(inter_params) == 0
-        assert len(param_dict.keys() - union_params) == 0
+        assert len(inter_params) == 0, "参数不能同时属于 decay 和 no_decay"
+        assert len(param_dict.keys() - union_params) == 0, "存在未分类的参数"
 
+        # 2. 构建优化器参数组（原有逻辑保留）
         optim_groups = [
             {"params": [param_dict[param_name] for param_name in sorted(list(decay))],
-             "weight_decay": self.weight_decay},
+            "weight_decay": self.weight_decay},  # 需要权重衰减的参数组
             {"params": [param_dict[param_name] for param_name in sorted(list(no_decay))],
-             "weight_decay": 0.0},
+            "weight_decay": 0.0}  # 不需要权重衰减的参数组（如BN、偏置）
         ]
 
+        # 3. 定义优化器和调度器（原有逻辑保留）
         optimizer = torch.optim.AdamW(optim_groups, lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.T_max, eta_min=0.0)
-        return [optimizer], [scheduler]
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=optimizer, 
+            T_max=self.T_max,  # 学习率从峰值降到最小值的周期（需确保 self.T_max 已在 __init__ 中定义）
+            eta_min=0.0        # 学习率下限
+        )
+
+        # 4. 关键修改：按 PL 要求返回「优化器 + 带配置的调度器」
+        # 格式：返回字典，包含 optimizer 和 lr_scheduler（调度器对象 + 配置字典）
+        return {
+            "optimizer": optimizer,  # 优化器（单优化器直接传对象，多优化器传列表）
+            "lr_scheduler": {
+                "scheduler": scheduler,  # 调度器对象
+                "interval": "epoch",     # 更新频率："epoch"（每个epoch更新）或 "step"（每个batch更新）
+                "frequency": 1,          # 每 1 个 interval 更新一次（默认1，无需修改）
+                # "monitor": "val_loss"  # 仅用于「基于指标的调度器」（如 ReduceLROnPlateau），CosineAnnealingLR 无需此参数
+            }
+        }
 
     @staticmethod
     def add_model_specific_args(parent_parser):
