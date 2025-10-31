@@ -48,7 +48,7 @@
 
         // python train.py --root datasets/ --embed_dim 64
         {
-            "name": "Python: train HiVT eval.py",
+            "name": "Python: train HiVT train.py",
             "type": "python",
             "request": "launch",
             "program": "/mnt/workspace/gac_jianglu/HiVT/train.py",

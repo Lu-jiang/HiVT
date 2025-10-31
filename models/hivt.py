@@ -28,6 +28,8 @@ from utils import TemporalData
 
 
 class HiVT(pl.LightningModule):
+    # HiVT模型的核心类，继承自PyTorch Lightning的LightningModule
+    # 封装了模型结构、前向传播、损失计算、优化器配置等完整逻辑
 
     def __init__(self,
                  historical_steps: int,
@@ -45,66 +47,120 @@ class HiVT(pl.LightningModule):
                  parallel: bool,
                  lr: float,
                  weight_decay: float,
-                 T_max: int,
-                 **kwargs) -> None:
+                 T_max: int,** kwargs) -> None:
+        # 初始化父类（LightningModule）
         super(HiVT, self).__init__()
+        
+        # 保存所有超参数到self.hparams，方便后续查看和加载
+        # 例如self.hparams.embed_dim可获取嵌入维度
         self.save_hyperparameters()
-        self.historical_steps = historical_steps
-        self.future_steps = future_steps
-        self.num_modes = num_modes
-        self.rotate = rotate
-        self.parallel = parallel
-        self.lr = lr
-        self.weight_decay = weight_decay
-        self.T_max = T_max
-
-        self.local_encoder = LocalEncoder(historical_steps=historical_steps,
-                                          node_dim=node_dim,
-                                          edge_dim=edge_dim,
-                                          embed_dim=embed_dim,
-                                          num_heads=num_heads,
-                                          dropout=dropout,
-                                          num_temporal_layers=num_temporal_layers,
-                                          local_radius=local_radius,
-                                          parallel=parallel)
-        self.global_interactor = GlobalInteractor(historical_steps=historical_steps,
-                                                  embed_dim=embed_dim,
-                                                  edge_dim=edge_dim,
-                                                  num_modes=num_modes,
-                                                  num_heads=num_heads,
-                                                  num_layers=num_global_layers,
-                                                  dropout=dropout,
-                                                  rotate=rotate)
-        self.decoder = MLPDecoder(local_channels=embed_dim,
-                                  global_channels=embed_dim,
-                                  future_steps=future_steps,
-                                  num_modes=num_modes,
-                                  uncertain=True)
+        
+        # 将关键参数绑定为实例变量，方便在类内其他方法中调用
+        self.historical_steps = historical_steps  # 历史时间步数
+        self.future_steps = future_steps          # 未来预测步数
+        self.num_modes = num_modes                # 多模态数量
+        self.rotate = rotate                      # 是否旋转变换
+        self.parallel = parallel                  # 是否并行计算局部编码
+        self.lr = lr                              # 学习率
+        self.weight_decay = weight_decay          # 权重衰减系数
+        self.T_max = T_max                        # 余弦退火周期
+        
+        # 初始化局部编码器（Local Encoder）
+        # 负责提取单个智能体为中心的局部特征（智能体交互、时间依赖、车道交互）
+        self.local_encoder = LocalEncoder(
+            historical_steps=historical_steps,  # 历史时间步数
+            node_dim=node_dim,                  # 智能体轨迹向量维度
+            edge_dim=edge_dim,                  # 关系向量维度
+            embed_dim=embed_dim,                # 嵌入维度
+            num_heads=num_heads,                # 注意力头数
+            dropout=dropout,                    # Dropout概率
+            num_temporal_layers=num_temporal_layers,  # 时间编码器层数
+            local_radius=local_radius,          # 局部区域半径
+            parallel=parallel                   # 是否并行计算
+        )
+        
+        # 初始化全局交互模块（Global Interactor）
+        # 负责捕捉跨局部区域的长距离依赖，更新局部特征为全局特征
+        self.global_interactor = GlobalInteractor(
+            historical_steps=historical_steps,  # 历史时间步数
+            embed_dim=embed_dim,                # 嵌入维度
+            edge_dim=edge_dim,                  # 关系向量维度
+            num_modes=num_modes,                # 多模态数量
+            num_heads=num_heads,                # 注意力头数
+            num_layers=num_global_layers,       # 全局Transformer层数
+            dropout=dropout,                    # Dropout概率
+            rotate=rotate                       # 是否旋转变换（用于跨区域坐标对齐）
+        )
+        
+        # 初始化解码器（MLPDecoder）
+        # 融合局部和全局特征，输出多模态轨迹预测
+        self.decoder = MLPDecoder(
+            local_channels=embed_dim,           # 局部特征维度
+            global_channels=embed_dim,          # 全局特征维度
+            future_steps=future_steps,          # 未来预测步数
+            num_modes=num_modes,                # 多模态数量
+            uncertain=True                      # 是否预测轨迹不确定性（输出均值+尺度）
+        )
+        
+        # 初始化回归损失函数：拉普拉斯负对数似然损失
+        # 用于计算预测轨迹与真实轨迹的误差（考虑不确定性）
         self.reg_loss = LaplaceNLLLoss(reduction='mean')
+        
+        # 初始化分类损失函数：软目标交叉熵损失
+        # 用于优化多模态轨迹的概率权重
         self.cls_loss = SoftTargetCrossEntropyLoss(reduction='mean')
-
-        self.minADE = ADE()
-        self.minFDE = FDE()
-        self.minMR = MR()
+        
+        # 初始化评价指标计算器
+        self.minADE = ADE()    # 最小平均位移误差计算器
+        self.minFDE = FDE()    # 最小最终位移误差计算器
+        self.minMR = MR()      # 缺失率计算器（终点误差>2米的比例）
 
     def forward(self, data: TemporalData):
-        if self.rotate:
-            rotate_mat = torch.empty(data.num_nodes, 2, 2, device=self.device)
-            sin_vals = torch.sin(data['rotate_angles'])
-            cos_vals = torch.cos(data['rotate_angles'])
+        # HiVT模型的前向传播核心逻辑：串联局部编码、全局交互、轨迹预测三个核心模块
+        # 输入：TemporalData实例（包含智能体轨迹、车道特征、图结构等所有预处理数据）
+        # 输出：预测结果（y_hat：多模态轨迹，pi：模态概率）
+
+        # 1. 旋转增强（可选）：将智能体轨迹旋转到自身局部坐标系，增强模型对方向变化的鲁棒性
+        if self.rotate:  # 若启用旋转旋转增强（初始化时配置）
+            # 1.1 构建每个智能体的旋转矩阵（基于自身运动方向角度rotate_angles）
+            rotate_mat = torch.empty(data.num_nodes, 2, 2, device=self.device)  # 形状[N, 2, 2]，N=智能体数
+            sin_vals = torch.sin(data['rotate_angles'])  # 角度正弦值（形状[N]）
+            cos_vals = torch.cos(data['rotate_angles'])  # 角度余弦值（形状[N]）
+            # 填充旋转矩阵（2D旋转公式：[cosθ, -sinθ; sinθ, cosθ]）
             rotate_mat[:, 0, 0] = cos_vals
             rotate_mat[:, 0, 1] = -sin_vals
             rotate_mat[:, 1, 0] = sin_vals
             rotate_mat[:, 1, 1] = cos_vals
-            if data.y is not None:
-                data.y = torch.bmm(data.y, rotate_mat)
+            
+            # 1.2 旋转真实轨迹标签（若存在）：与预测值的坐标系保持一致（仅训练/验证时需要）
+            if data.y is not None:  # data.y为未来轨迹标签（测试集无标签）
+                # 批量矩阵乘法：将每个智能体的未来轨迹（[N, F, 2]）与自身旋转矩阵相乘
+                data.y = torch.bmm(data.y, rotate_mat)  # 形状[N, F, 2] → 旋转后的标签
+            
+            # 1.3 保存旋转矩阵到数据中（供后续模块使用，如局部编码器）
             data['rotate_mat'] = rotate_mat
         else:
+            # 不启用旋转增强时，旋转矩阵设为None
             data['rotate_mat'] = None
 
+        # 2. 局部编码：提取每个智能体的时序特征和局部交互特征（含智能体-车道交互）
+        # 输入：完整的TemporalData（含x、lane_vectors、lane_actor_index等）
+        # 输出：local_embed（局部嵌入特征），形状[N, L]（L=局部特征维度）
         local_embed = self.local_encoder(data=data)
+
+        # 3. 全局交互：建模智能体之间的长距离依赖关系，聚合全局场景信息
+        # 输入：TemporalData + 局部嵌入特征local_embed
+        # 输出：global_embed（全局嵌入特征），形状[F, N, G]（F=模态数，N=智能体数，G=全局特征维度）
         global_embed = self.global_interactor(data=data, local_embed=local_embed)
+
+        # 4. 多模态解码：基于局部+全局特征，预测未来轨迹的多模态分布
+        # 输入：local_embed（局部特征） + global_embed（全局特征）
+        # 输出：
+        #   y_hat：预测轨迹（含位置+不确定性），形状[F, N, H, 4]（H=未来步，4=x/y+scale_x/scale_y）
+        #   pi：模态概率，形状[N, F]（每个智能体对应各模态的权重）
         y_hat, pi = self.decoder(local_embed=local_embed, global_embed=global_embed)
+
+        # 返回预测结果（用于计算损失或输出最终预测）
         return y_hat, pi
 
     def training_step(self, data, batch_idx):
@@ -233,21 +289,72 @@ class HiVT(pl.LightningModule):
 
     @staticmethod
     def add_model_specific_args(parent_parser):
+        # 为HiVT模型创建独立的参数组，避免与其他参数混淆
         parser = parent_parser.add_argument_group('HiVT')
+        
+        # 历史观测时间步数（单位：步）
+        # 论文中设置为20步，对应2秒（每步0.1秒），与Argoverse数据集的观测周期一致
         parser.add_argument('--historical_steps', type=int, default=20)
+        
+        # 未来预测时间步数（单位：步）
+        # 论文中设置为30步，对应3秒（每步0.1秒），是自动驾驶场景的标准预测周期
         parser.add_argument('--future_steps', type=int, default=30)
+        
+        # 多模态预测的轨迹模式数量
+        # 论文中设置为6种模式，通过混合拉普拉斯分布覆盖不同可能的未来轨迹
         parser.add_argument('--num_modes', type=int, default=6)
+        
+        # 是否对局部区域进行旋转变换
+        # 默认为True，实现旋转不变性：以中心智能体运动方向为基准旋转所有局部向量
         parser.add_argument('--rotate', type=bool, default=True)
+        
+        # 智能体轨迹向量的原始维度
+        # 2D场景中为x、y方向的坐标差，故维度为2（对应论文中的轨迹向量表示）
         parser.add_argument('--node_dim', type=int, default=2)
+        
+        # 智能体间/智能体-车道间关系向量的原始维度
+        # 2D场景中为x、y方向的相对位置，故维度为2（对应论文中的相对位置向量）
         parser.add_argument('--edge_dim', type=int, default=2)
+        
+        # 特征嵌入维度（模型隐藏层维度）
+        # 论文中有HiVT-64（64）和HiVT-128（128）两种配置，必须通过命令行指定
         parser.add_argument('--embed_dim', type=int, required=True)
+        
+        # 多头注意力的头数
+        # 论文中设置为8头，用于并行捕捉不同子空间的特征交互
         parser.add_argument('--num_heads', type=int, default=8)
+        
+        # Dropout概率（防止过拟合）
+        # 论文中设置为0.1，在注意力层和MLP层后应用
         parser.add_argument('--dropout', type=float, default=0.1)
+        
+        # 时间编码器（Temporal Encoder）的Transformer层数
+        # 论文中设置为4层，用于捕捉历史轨迹的时间依赖关系
         parser.add_argument('--num_temporal_layers', type=int, default=4)
+        
+        # 全局交互模块（Global Interactor）的Transformer层数
+        # 论文中设置为3层，用于捕捉跨局部区域的长距离依赖
         parser.add_argument('--num_global_layers', type=int, default=3)
+        
+        # 局部编码器的区域半径（单位：米）
+        # 论文中默认50米，控制局部区域内智能体和车道的筛选范围
         parser.add_argument('--local_radius', type=float, default=50)
+        
+        # 是否并行计算多个智能体的局部编码
+        # 默认为False，若开启可加速训练（需硬件支持），不影响模型结构
         parser.add_argument('--parallel', type=bool, default=False)
+        
+        # 初始学习率
+        # 论文中设置为5e-4，用于Adam优化器
         parser.add_argument('--lr', type=float, default=5e-4)
+        
+        # 权重衰减系数（L2正则化）
+        # 论文中设置为1e-4，防止模型过拟合
         parser.add_argument('--weight_decay', type=float, default=1e-4)
+        
+        # 余弦退火学习率调度的周期（总迭代轮次）
+        # 与max_epochs保持一致（64），实现学习率随训练轮次余弦衰减
         parser.add_argument('--T_max', type=int, default=64)
+        
+        # 返回添加完模型参数的解析器
         return parent_parser
